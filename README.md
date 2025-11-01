@@ -123,4 +123,4 @@ This project doesn't include a license file. Add one (for example, `MIT`) to cla
 ---
 
 
-![Multimodal Data Processing System Screenshot](\screenshot\Screenshot.png)
+![Multimodal Data Processing System Screenshot](screenshot/Screenshot.png)
