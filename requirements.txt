@@ -1,0 +1,10 @@
+PyMuPDF
+python-docx
+python-pptx
+pytesseract
+opencv-python
+SpeechRecognition
+moviepy
+google-generativeai
+python-dotenv
+Streamlit
