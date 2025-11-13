@@ -1,8 +1,6 @@
 import os
 import sys
 
-# Ensure the project root is on sys.path so local packages (Extractors, llm, etc.)
-# can be imported reliably when running the script from the workspace.
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from extractors.video_extractor import extract_video_text

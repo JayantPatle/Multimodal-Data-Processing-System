@@ -6,140 +6,129 @@ from moviepy.editor import VideoFileClip
 import speech_recognition as sr
 from extractors.text_extractor import extract_text
 from llm.gemini_client import ask_gemini
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Set custom Tesseract path
+# Tesseract path
 TESSERACT_PATH = os.path.join(os.path.dirname(__file__), 'tools', 'Tesseract-OCR', 'tesseract.exe')
 
+# Fallback sanitization to prevent prompt/stub leaks
+def sanitize_response(resp: str) -> str:
+    if not resp:
+        return ""
+    if not isinstance(resp, str):
+        resp = str(resp)
+
+    # Remove stub or echoed prompts
+    resp = re.sub(r"^\(stub\).*", "", resp, flags=re.S)
+    resp = re.sub(r"(?is)^Read the following.*?Content to summarize:.*", "", resp)
+    resp = re.sub(r"(?i)summary preview:\s*", "", resp)
+
+    return resp.strip()
+
+# Extract audio or video
 def extract_audio_text(filepath):
-    """Extract text from audio/video files"""
     r = sr.Recognizer()
     audio_filepath = None
     
     try:
-        logger.info(f"Processing audio/video file: {filepath}")
-        
         if filepath.endswith('.mp4'):
-            try:
-                # Extract audio from video
-                video = VideoFileClip(filepath)
-                audio_filepath = filepath.replace('.mp4', '.wav')
-                video.audio.write_audiofile(audio_filepath)
-                video.close()
-                logger.info(f"Audio extracted to: {audio_filepath}")
-            except Exception as e:
-                logger.error(f"Video processing failed: {str(e)}")
-                raise
+            video = VideoFileClip(filepath)
+            audio_filepath = filepath.replace('.mp4', '.wav')
+            video.audio.write_audiofile(audio_filepath)
+            video.close()
         else:
             audio_filepath = filepath
 
-        # Convert audio to text
-        try:
-            with sr.AudioFile(audio_filepath) as source:
-                audio = r.record(source)
-                text = r.recognize_google(audio)
-                logger.info("Audio transcription successful")
-                return text
-        except Exception as e:
-            logger.error(f"Speech recognition failed: {str(e)}")
-            raise
+        with sr.AudioFile(audio_filepath) as source:
+            audio = r.record(source)
+            text = r.recognize_google(audio)
+            return text
 
     except Exception as e:
-        logger.error(f"Audio extraction failed: {str(e)}")
+        logger.error(f"Audio extraction failed: {e}")
         raise
-    
+
     finally:
-        # Cleanup temporary files
         if audio_filepath and filepath.endswith('.mp4'):
             if os.path.exists(audio_filepath):
                 os.remove(audio_filepath)
-                logger.info(f"Cleaned up temporary file: {audio_filepath}")
 
 # Initialize Tesseract
 try:
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
-    logger.info(f"Tesseract initialized at: {TESSERACT_PATH}")
-except Exception as e:
-    logger.error(f"Tesseract initialization failed: {e}")
+except:
+    pass
 
-# Streamlit UI Configuration
+# Streamlit UI
 st.set_page_config(page_title="Smart Content Analyzer", layout="centered")
 st.title("📄 Smart Content Analyzer")
-st.markdown("*Supports documents, images, audio, and video files*")
+st.write("Upload any document, image, audio, or video — I’ll extract the text and generate a friendly, human-sounding summary.")
 
-# File uploader
 uploaded_file = st.file_uploader(
-    "Upload your file",
-    type=["txt", "pdf", "docx", "png", "jpg", "mp3", "mp4"]
+    "Choose a file to analyze",
+    type=["txt", "pdf", "docx", "png", "jpg", "jpeg", "mp3", "mp4"]
 )
 
 if uploaded_file:
-    # Create upload directory
     upload_folder = "uploads"
     os.makedirs(upload_folder, exist_ok=True)
     filepath = os.path.join(upload_folder, uploaded_file.name)
-    
-    # Save uploaded file
+
     with open(filepath, "wb") as f:
         f.write(uploaded_file.getbuffer())
-    
-    st.success("✅ File uploaded successfully!")
 
-    if st.button("Analyze Content"):
-        with st.spinner("Processing..."):
+    st.success("📄 File uploaded successfully!")
+
+    if st.button("✨ Generate Summary"):
+        with st.spinner("Extracting content and generating your summary..."):
             try:
-                # Handle different file types
+                # Routing per file extension
                 if filepath.lower().endswith(('.mp3', '.mp4')):
                     extracted_text = extract_audio_text(filepath)
                 else:
-                    # Verify Tesseract for image files
                     if filepath.lower().endswith(('.png', '.jpg', '.jpeg')):
                         if not os.path.exists(TESSERACT_PATH):
-                            raise Exception("Tesseract OCR is not installed in tools/Tesseract-OCR")
+                            raise Exception("Tesseract not found — OCR unavailable.")
                     extracted_text = extract_text(filepath)
 
                 if not extracted_text:
-                    st.error("No content could be extracted")
+                    st.error("No readable text found in this file.")
                 else:
-                    # Get analysis from Gemini
+                    # Use Gemini 2.5 Flash
                     response = ask_gemini(
-                    prompt=(
-                    "Read the following content carefully and write a concise, well-structured summary "
-                    "in simple English within 100 words. Focus on the main ideas, key points, and overall meaning. "
-                    "Avoid unnecessary details, repetitions, or examples. "
-                    "Ensure the tone is professional and easy to understand.\n\n"
-                    "Content to summarize:"
-                    ),
+                        prompt="Summarize this content in a warm, simple, human tone within 500 words.",
                         text_data=extracted_text
                     )
-                    
-                    # Display results
-                    st.subheader("🔍 Analysis Results:")
-                    st.markdown(response)
-                    
-                    # Show file info
+
+                    clean = sanitize_response(response)
+
+                    st.subheader("📝 Summary")
+                    if clean:
+                        st.markdown(clean)
+                    else:
+                        st.warning("The assistant didn't produce a summary. Try again.")
+
+                    # File details
                     st.markdown("---")
-                    file_size = os.path.getsize(filepath) / 1024
-                    st.markdown("**File Information:**")
-                    st.markdown(f"- Type: {os.path.splitext(filepath)[1][1:].upper()}")
-                    st.markdown(f"- Size: {file_size:.1f} KB")
-                    st.markdown(f"- Content Length: {len(extracted_text)} characters")
+                    size_kb = os.path.getsize(filepath) / 1024
+                    st.write(f"**File type:** {filepath.split('.')[-1].upper()}")
+                    st.write(f"**Size:** {size_kb:.1f} KB")
+                    st.write(f"**Extracted characters:** {len(extracted_text)}")
 
             except Exception as e:
-                st.error(f"Error: {str(e)}")
-                logger.error(f"Process failed: {str(e)}")
+                st.error(f"Something went wrong: {e}")
+                logger.error(f"Error: {e}")
 
             finally:
-                # Cleanup
                 if os.path.exists(filepath):
                     os.remove(filepath)
-                    logger.info(f"Cleaned up: {filepath}")
-else:
-    st.info("📎 Upload a file to begin analysis")
 
-# Footer
+else:
+    st.info("📎 Upload a file to start.")
+
 st.markdown("---")
-st.markdown("*Built with Streamlit and Google Gemini AI*")
+st.markdown("Made with ❤️ using Streamlit & Gemini 2.5 Flash")
